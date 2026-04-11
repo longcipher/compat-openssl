@@ -2,11 +2,11 @@
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "TODO"
+repository = "https://github.com/longcipher/compat-openssl"
 
 [workspace]
-members = ["bin/*", "crates/*"]
-exclude = [".github/"]
+members = ["crates/*"]
+exclude = [".github/", "tests/fixtures/*"]
 resolver = "3"
 
 [workspace.dependencies]

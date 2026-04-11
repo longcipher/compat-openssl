@@ -11,7 +11,14 @@ format:
 # Auto-fix linting issues
 fix:
   rumdl check --fix .
-  cargo +nightly clippy --fix --all --allow-dirty
+  just fix-openssl
+  just fix-boring
+
+fix-openssl:
+  cargo +nightly clippy --fix --workspace --features backend-openssl --allow-dirty
+
+fix-boring:
+  cargo +nightly clippy --fix --workspace --features backend-boring --allow-dirty
 
 # Run all lints
 lint:
@@ -19,41 +26,83 @@ lint:
   rumdl check .
   taplo fmt --check
   cargo +nightly fmt --all -- --check
-  cargo +nightly clippy --all -- -D warnings
+  just lint-openssl
+  just lint-boring
   cargo machete
 
-# Run tests
-test:
-  cargo test --all-features
+lint-openssl:
+  cargo +nightly clippy --workspace --features backend-openssl -- -D warnings
 
-# Run BDD scenarios
-bdd:
-  cargo test -p common --test bdd
+lint-boring:
+  cargo +nightly clippy --workspace --features backend-boring -- -D warnings
 
-# Run both TDD and BDD suites
-test-all:
-  cargo test --all-features
-  cargo test -p common --test bdd
+check-openssl:
+  cargo check --workspace --all-targets --features backend-openssl
 
-# Run tests with coverage
-test-coverage:
-  cargo tarpaulin --all-features --workspace --timeout 300
-
-# Build entire workspace
-build:
-  cargo build --workspace
+check-boring:
+  cargo check --workspace --all-targets --features backend-boring
 
 # Check all targets compile
 check:
-  cargo check --all-targets --all-features
+  just check-openssl
+  just check-boring
 
-# Publish all crates to crates.io (dry run)
+build-openssl:
+  cargo build --workspace --features backend-openssl
+
+build-boring:
+  cargo build --workspace --features backend-boring
+
+# Build entire workspace
+build:
+  just build-openssl
+  just build-boring
+
+test-openssl:
+  cargo test --workspace --features backend-openssl
+
+test-boring:
+  cargo test --workspace --features backend-boring
+
+# Run tests
+test:
+  just test-openssl
+  just test-boring
+
+bdd-openssl:
+  cargo test -p openssl --test bdd --features backend-openssl,internal-bdd
+
+bdd-boring:
+  cargo test -p openssl --test bdd --features backend-boring,internal-bdd
+
+# Run BDD scenarios
+bdd:
+  just bdd-openssl
+  just bdd-boring
+
+# Run both TDD and BDD suites
+test-all:
+  just test
+  just bdd
+
+test-coverage-openssl:
+  cargo tarpaulin --workspace --features backend-openssl --timeout 300
+
+test-coverage-boring:
+  cargo tarpaulin --workspace --features backend-boring --timeout 300
+
+# Run tests with coverage
+test-coverage:
+  just test-coverage-openssl
+  just test-coverage-boring
+
+# Crates.io publishing is intentionally unsupported for this repository
 publish-check:
-  cargo publish --workspace --dry-run --allow-dirty
+  @echo "crates.io publishing is intentionally unsupported for compat-openssl" >&2; exit 1
 
-# Publish all crates to crates.io
+# Crates.io publishing is intentionally unsupported for this repository
 publish:
-  cargo publish --workspace
+  @echo "crates.io publishing is intentionally unsupported for compat-openssl" >&2; exit 1
 
 # Check for Chinese characters
 check-cn:
@@ -73,6 +122,7 @@ clean:
 # Install all required development tools
 setup:
   cargo install cargo-machete
+  cargo install rumdl
   cargo install taplo-cli
   cargo install typos-cli
 

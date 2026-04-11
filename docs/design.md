@@ -2,9 +2,10 @@
 
 | Metadata | Details |
 | :--- | :--- |
-| Status | Draft |
+| Status | Implementation Ready |
 | Created | 2026-04-11 |
 | Repository | compat-openssl |
+| Reference Fork | <https://github.com/longcipher/rust-openssl> branch compat-openssl |
 | Scope | Workspace architecture, dependency replacement, API compatibility, and verification strategy |
 
 ## 1. Summary
@@ -102,6 +103,7 @@ This layer contains the actual backend implementations:
 - A tracked fork of `rust-openssl` where package identity changes prevent `links` collisions:
   - `openssl-sys` becomes package `real-openssl-sys` with `links = "real_openssl"`.
   - `openssl` becomes package `real-openssl` and depends on `real-openssl-sys`.
+    - The current reference branch already exposes `real-openssl-sys` version `0.9.112` and `real-openssl` version `0.10.76`.
 
 This layer does not attempt to preserve public package identity. Its only responsibility is to provide the real implementation behind the shim. The fork is maintained as an actual Git repository and consumed via pinned `git` + `rev` metadata, or mirrored locally as a Git submodule if the repository later needs a checked-in copy. Raw copied vendor snapshots are explicitly out of scope.
 
@@ -176,6 +178,29 @@ Required fork changes:
 
 The fork must remain thin. It is not the place for compatibility logic. All compatibility behavior belongs in the shim crates. Preserving Git history is part of the design because upstream `rust-openssl` security fixes must remain mergeable.
 
+### 9.1.1 Current Fork Reference and Consumption
+
+The current reference fork already exists at `https://github.com/longcipher/rust-openssl` on branch `compat-openssl`.
+
+At the time of writing, that branch exposes:
+
+- `real-openssl-sys` version `0.9.112` with `links = "real_openssl"`.
+- `real-openssl` version `0.10.76` depending on `real-openssl-sys`.
+
+Representative dependency wiring for the shim crates during active development:
+
+```toml
+# crates/openssl-sys/Cargo.toml
+[dependencies]
+real-openssl-sys = { package = "real-openssl-sys", git = "https://github.com/longcipher/rust-openssl", branch = "compat-openssl", version = "0.9.112", optional = true }
+
+# crates/openssl/Cargo.toml
+[dependencies]
+real-openssl = { package = "real-openssl", git = "https://github.com/longcipher/rust-openssl", branch = "compat-openssl", version = "0.10.76", optional = true }
+```
+
+Branch-based references are acceptable while the compatibility line is still moving. Once the first fully green fixture matrix exists, the workspace should switch from `branch = "compat-openssl"` to an exact `rev = "..."` so CI and downstream reproduction stop depending on a floating branch head.
+
 ### 9.2 Backend Feature Model
 
 The backend model must avoid Cargo feature union traps.
@@ -208,6 +233,24 @@ backend-boring = ["dep:boring-sys"]
 
 This is stricter than the original sketch, but it is required for correctness. A default backend on the patched crates would make BoringSSL selection fragile or impossible once transitive dependencies enable defaults.
 
+### 9.2.1 Root Activation Pattern
+
+The root application must activate the backend explicitly, even when it only consumes OpenSSL transitively.
+
+Representative root manifest shape:
+
+```toml
+[features]
+default = ["tls-openssl"]
+tls-openssl = ["openssl/backend-openssl"]
+tls-boring = ["openssl/backend-boring"]
+
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+```
+
+`default-features = false` is critical here. `[patch.crates-io]` does not bypass feature union rules, and a stray default backend on the root dependency would undermine mutual exclusivity across the graph.
+
 ### 9.3 `openssl-sys` Build Metadata Proxy
 
 The sys shim owns the downstream build contract. For the OpenSSL backend it mostly relays metadata. For the BoringSSL backend it acts as a translation layer that emits a documented OpenSSL compatibility profile rather than blindly rewriting environment-variable prefixes.
@@ -215,10 +258,10 @@ The sys shim owns the downstream build contract. For the OpenSSL backend it most
 Behavior:
 
 1. The chosen backend sys crate runs its own build script as usual.
-2. Cargo exposes its metadata to the shim build script as `DEP_BSSL_*` or `DEP_REAL_OPENSSL_*`.
+2. Cargo exposes its metadata to the shim build script as `DEP_BORINGSSL_*` or `DEP_REAL_OPENSSL_*`.
 3. The shim maps backend metadata into an `openssl` compatibility profile.
 4. Under the OpenSSL backend, most compatibility keys are forwarded from `DEP_REAL_OPENSSL_*`.
-5. Under the BoringSSL backend, required keys are synthesized where downstream crates expect OpenSSL semantics, especially `DEP_OPENSSL_VERSION_NUMBER`.
+5. Under the BoringSSL backend, required keys are synthesized where downstream crates expect OpenSSL semantics, especially `DEP_OPENSSL_VERSION_NUMBER`, and include discovery falls back to `DEP_BORINGSSL_ROOT` when `DEP_BORINGSSL_INCLUDE` is absent.
 6. Cargo then exposes the resulting values to downstream crates as `DEP_OPENSSL_*`.
 
 Important rules:
@@ -234,7 +277,10 @@ Important rules:
 Representative build script shape:
 
 ```rust
-use std::env;
+use std::{env, path::PathBuf};
+
+const BORINGSSL_INCLUDE_ENV: &str = "DEP_BORINGSSL_INCLUDE";
+const BORINGSSL_ROOT_ENV: &str = "DEP_BORINGSSL_ROOT";
 
 fn main() {
 	match (
@@ -261,19 +307,51 @@ fn relay_real_openssl() {
 }
 
 fn relay_boring_as_ossl111() {
-	forward_if_present("DEP_BSSL_INCLUDE", "include");
+	if !forward_if_present(BORINGSSL_INCLUDE_ENV, "include") {
+		forward_boring_include_from_root();
+	}
 	println!("cargo:version_number=1010100f");
 	println!("cargo:backend=boring");
 }
 
-fn forward_if_present(env_key: &str, cargo_key: &str) {
+fn forward_boring_include_from_root() {
+	if let Some(include_dir) = boring_include_from_root() {
+		println!("cargo:include={}", include_dir.to_string_lossy());
+	}
+}
+
+fn boring_include_from_root() -> Option<PathBuf> {
+	let root = env::var_os(BORINGSSL_ROOT_ENV)?;
+	let include_dir = PathBuf::from(root).join("boringssl").join("include");
+	include_dir.is_dir().then_some(include_dir)
+}
+
+fn forward_if_present(env_key: &str, cargo_key: &str) -> bool {
 	if let Some(value) = env::var_os(env_key) {
 		println!("cargo:{cargo_key}={}", value.to_string_lossy());
+		return true;
 	}
+
+	false
 }
 ```
 
 The exact synthesized BoringSSL profile can evolve, but it must be deliberate and documented. The compatibility layer is not just a forwarder; it is an opinionated contract that tells downstream crates which OpenSSL feature baseline they may assume.
+
+### 9.3.1 Initial Compatibility Metadata Table
+
+The initial compatibility profile should be treated as an explicit table, not an implicit side effect of whatever the backend crate happens to emit.
+
+| Downstream key | OpenSSL backend source | BoringSSL backend source | Notes |
+| :--- | :--- | :--- | :--- |
+| `DEP_OPENSSL_INCLUDE` | Forward from `DEP_REAL_OPENSSL_INCLUDE` | Forward from `DEP_BORINGSSL_INCLUDE` if present, otherwise derive `${DEP_BORINGSSL_ROOT}/boringssl/include` | Required for downstream header consumers |
+| `DEP_OPENSSL_VERSION_NUMBER` | Forward from `DEP_REAL_OPENSSL_VERSION_NUMBER` | Synthesize `1010100f` | Declares the initial OpenSSL 1.1.1 compatibility baseline |
+| `DEP_OPENSSL_LIBRESSL` | Forward if present | Omit by default | Do not invent LibreSSL identity on BoringSSL |
+| `DEP_OPENSSL_LIBRESSL_VERSION_NUMBER` | Forward if present | Omit by default | Same rationale as above |
+| `DEP_OPENSSL_CONF` | Forward if present | Omit unless a fixture proves it is required and semantics are understood | `conf` is not a free-form dump key |
+| `DEP_OPENSSL_BACKEND` | Synthesize `openssl` | Synthesize `boring` | Internal diagnostic key used by fixtures |
+
+Phase 2 confirmed that the chosen `boring-sys` revision emits `DEP_BORINGSSL_*` keys because it uses `links = "boringssl"`. If a backend key is absent, the shim must not emit a matching `DEP_OPENSSL_*` key unless the compatibility profile explicitly defines a synthesized value and the fixture matrix proves the contract is sound.
 
 ### 9.4 `openssl-sys` Raw API Surface
 
@@ -341,12 +419,25 @@ ssl-backend-openssl = ["openssl/backend-openssl"]
 ssl-backend-boring = ["openssl/backend-boring"]
 
 [dependencies]
-openssl = { version = "0.10.64", default-features = false }
+openssl = { version = "0.10.76", default-features = false }
 ```
 
 If the application only depends on OpenSSL transitively, it should still add a direct dependency on patched `openssl` solely to choose the backend feature. That dependency exists to drive Cargo feature propagation across the graph even if no application code imports `openssl` directly.
 
 The design intentionally avoids backend selection by environment variable. Backend choice must be explicit in Cargo features so lockfiles, CI, and reproducible builds stay deterministic.
+
+### 9.7.1 Patch Resolution Rules
+
+Cargo's `[patch.crates-io]` mechanism does not ignore normal version resolution. It adds the patched package version to the source and still resolves the highest compatible version that satisfies the dependency requirement.
+
+Implications for this repository:
+
+- `openssl = "^0.10"` can resolve through a shim at `0.10.76`.
+- `openssl = "=0.10.76"` can resolve through a shim at `0.10.76`.
+- `openssl = "=0.10.64"` cannot resolve through a shim at `0.10.76`.
+- The same rule applies independently to `openssl-sys`, currently mirrored as `0.9.112` on the reference fork.
+
+The compatibility line therefore has to mirror the upstream version pair it claims to replace. Supporting multiple exact pins requires separate maintained tags, branches, or release lines rather than one universal shim version.
 
 ### 9.8 Shim Version Policy and Patch SemVer
 
@@ -395,10 +486,10 @@ test-boring:
 	cargo test --workspace --features backend-boring
 
 bdd-openssl:
-	cargo test -p openssl --test bdd --features backend-openssl
+	cargo test -p openssl --test bdd --features backend-openssl,internal-bdd
 
 bdd-boring:
-	cargo test -p openssl --test bdd --features backend-boring
+	cargo test -p openssl --test bdd --features backend-boring,internal-bdd
 
 check:
 	just check-openssl
@@ -415,6 +506,8 @@ bdd:
 
 Cargo commands must run sequentially, never in parallel, because the workspace shares a `target/` directory.
 
+The BDD runner lives at `crates/openssl/tests/bdd.rs` and should stay behind an internal-only feature gate so ordinary `cargo test -p openssl --features backend-openssl` does not execute cucumber unless the caller explicitly requests it.
+
 `cargo-hack` is a useful supplemental tool for checking the positive feature powerset without relying on `--all-features`, for example:
 
 ```bash
@@ -429,6 +522,43 @@ Real compatibility must be proven with standalone consumer fixtures:
 
 These fixtures are not workspace members. The root workspace should explicitly exclude `tests/fixtures/*`, and each fixture should carry its own Cargo manifest and workspace boundary so `[patch.crates-io]` is evaluated from the fixture itself rather than inherited accidentally from the repository root.
 
+Representative root workspace change:
+
+```toml
+[workspace]
+members = ["crates/*"]
+exclude = [".github/", "tests/fixtures/*"]
+resolver = "3"
+```
+
+Representative fixture manifest shape:
+
+```toml
+[package]
+name = "downstream-build-metadata"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+default = []
+backend-openssl = ["openssl/backend-openssl", "openssl-sys/backend-openssl"]
+backend-boring = ["openssl/backend-boring", "openssl-sys/backend-boring"]
+
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+openssl-sys = { version = "0.9.112", default-features = false }
+
+[patch.crates-io]
+openssl = { path = "../../../crates/openssl" }
+openssl-sys = { path = "../../../crates/openssl-sys" }
+```
+
+The metadata fixture must keep a direct dependency on `openssl-sys`, not only `openssl`, because Cargo only exposes `DEP_OPENSSL_*` keys to the build scripts of immediate dependents of the linked sys crate. The safe-layer `openssl` dependency keeps the patch graph realistic, while the direct `openssl-sys` edge is what makes the metadata contract observable inside the fixture build script.
+
+The empty `[workspace]` table makes the fixture its own workspace root and stops Cargo from walking upward into the repository workspace.
+
 - `tests/fixtures/downstream-build-metadata`
   - contains a `build.rs` that asserts required `DEP_OPENSSL_*` variables are present.
 - `tests/fixtures/downstream-native-tls`
@@ -436,9 +566,19 @@ These fixtures are not workspace members. The root workspace should explicitly e
 - `tests/fixtures/downstream-openssl-sys`
   - depends directly on `openssl-sys` and compiles against the raw API surface.
 - `tests/fixtures/downstream-openssl-exact-pin`
-  - depends on the exact upstream version currently mirrored by the shim, such as `openssl = "=0.10.64"`, to verify strict-version patch resolution.
+  - depends on the exact upstream version currently mirrored by the shim, such as `openssl = "=0.10.76"`, to verify strict-version patch resolution.
 
 Each fixture is built twice, once per backend, using `[patch.crates-io]` back to this workspace. Exact-pin coverage for older upstream versions is handled by matching maintenance branches or tags, not by a single branch pretending to satisfy multiple exact versions at once.
+
+Representative build invocation from the repository root:
+
+```bash
+cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --features backend-openssl
+cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --features backend-boring
+
+cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --features backend-openssl
+cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --features backend-boring
+```
 
 ### 10.3 BDD Scenario Inventory
 
@@ -451,10 +591,12 @@ The existing checkout scenario should be replaced with compatibility scenarios s
   - Scenario: enabling no backend fails fast.
 - `metadata-proxy.feature`
   - Scenario: a downstream build script sees `DEP_OPENSSL_INCLUDE` under the OpenSSL backend.
-  - Scenario: a downstream build script sees the expected compatibility metadata under the BoringSSL backend.
+    - Scenario: a downstream build script sees `DEP_OPENSSL_BACKEND=openssl` under the OpenSSL backend.
+    - Scenario: a downstream build script sees the expected compatibility metadata under the BoringSSL backend.
 - `downstream-compat.feature`
   - Scenario: a `native-tls` consumer builds under the OpenSSL backend.
   - Scenario: a `native-tls` consumer builds under the BoringSSL backend.
+    - Scenario: a direct `openssl-sys` consumer builds under both backends.
   - Scenario: an exact-version `openssl = "=x.y.z"` consumer resolves against the current compatibility line.
 
 ### 10.4 Unit and Property Testing
@@ -474,7 +616,7 @@ Property tests are useful for deterministic compatibility transforms such as met
 | Risk | Impact | Mitigation |
 | :--- | :--- | :--- |
 | Default backend on patched crates gets unioned with transitive features | Root cannot reliably select BoringSSL | Use `default = []` and require explicit root selection |
-| BoringSSL compatibility metadata diverges from downstream expectations | Build scripts miscompile or enable the wrong cfg paths | Treat synthesized metadata as a versioned OpenSSL-compatibility profile and verify it with consumer fixtures |
+| BoringSSL compatibility metadata diverges from downstream expectations | Build scripts miscompile or enable the wrong cfg paths | Treat synthesized metadata, especially `DEP_OPENSSL_VERSION_NUMBER=1010100f`, as a versioned OpenSSL-compatibility profile and verify it with consumer fixtures |
 | BoringSSL lacks APIs assumed by downstream crates | Compile failures or unsafe runtime mismatches | Use compiler-driven fixture builds, minimal tiered polyfills, and explicit unsupported cases |
 | Template `--all-features` commands remain in CI | CI fails or hides backend selection errors | Replace with sequential backend matrix commands |
 | The tracked fork drifts from upstream `rust-openssl` | Compatibility surface silently diverges or security fixes arrive late | Pin the fork by Git revision, preserve Git history, and gate upgrades through fixture builds |
@@ -489,6 +631,14 @@ Property tests are useful for deterministic compatibility transforms such as met
 - Remove checkout-template BDD artifacts.
 - Add backend-aware workspace commands.
 - Exclude `tests/fixtures/*` from the root workspace and create the standalone fixture layout.
+
+Phase 0 is a hard prerequisite for Phase 1. The repository should not begin shim implementation work until all of the following are complete:
+
+- [ ] `features/checkout.feature` replaced by compatibility-oriented feature files.
+- [ ] The `Justfile` no longer contains `--all-features` test or check commands.
+- [ ] The `Justfile` no longer references `-p common`.
+- [ ] The root `Cargo.toml` excludes `tests/fixtures/*` from the workspace.
+- [ ] Each fixture under `tests/fixtures/*` has its own workspace boundary and local `[patch.crates-io]` section.
 
 ### Phase 1: OpenSSL Passthrough Baseline
 
@@ -518,8 +668,10 @@ Property tests are useful for deterministic compatibility transforms such as met
 
 ### Phase 5: Consumer Hardening and Optional Tooling
 
-- Add an AST/codegen helper only if manual gap closure has become the main maintenance bottleneck.
-- Expand fixture coverage to additional downstream crates if needed.
+- Keep AST/codegen out of scope unless manual gap closure becomes the main maintenance bottleneck.
+- Add a gated cucumber runner under `crates/openssl/tests/bdd.rs` and point the `Justfile` BDD commands at it.
+- Expand fixture coverage where it improves consumer confidence, including direct `openssl-sys` consumers.
+- Tighten metadata-fixture assertions so the observed backend marker matches the selected backend feature.
 - Finalize root feature examples and user documentation.
 - Stabilize CI to run the full backend matrix sequentially.
 

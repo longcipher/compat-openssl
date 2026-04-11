@@ -1,0 +1,18 @@
+[package]
+name = "downstream-openssl-sys"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+backend-boring = ["openssl-sys/backend-boring"]
+backend-openssl = ["openssl-sys/backend-openssl"]
+default = []
+
+[dependencies]
+openssl-sys = { version = "0.9.112", default-features = false }
+
+[patch.crates-io]
+openssl = { path = "../../../crates/openssl" }
+openssl-sys = { path = "../../../crates/openssl-sys" }

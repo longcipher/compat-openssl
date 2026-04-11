@@ -1,0 +1,34 @@
+[package]
+name = "openssl"
+version = "0.10.76"
+edition = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "compat-openssl Phase 1 shim for the OpenSSL backend"
+
+[features]
+backend-boring = ["dep:boring", "dep:openssl-sys", "openssl-sys/backend-boring"]
+backend-openssl = [
+    "dep:openssl-sys",
+    "dep:real-backend-openssl",
+    "openssl-sys/backend-openssl",
+]
+default = []
+internal-bdd = []
+
+[dependencies]
+boring = { version = "5.0.2", optional = true }
+openssl-sys = { version = "0.9.112", path = "../openssl-sys", optional = true }
+real-backend-openssl = { git = "https://github.com/longcipher/rust-openssl", rev = "639f3b91eb198444930777600d25ee1d005466e3", version = "0.10.76", package = "real-openssl", optional = true }
+
+[dev-dependencies]
+cucumber.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "bdd"
+harness = false
+required-features = ["internal-bdd"]
+
+[package.metadata.cargo-machete]
+ignored = ["openssl-sys"]

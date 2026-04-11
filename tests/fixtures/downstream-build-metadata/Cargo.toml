@@ -1,0 +1,23 @@
+[package]
+name = "downstream-build-metadata"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[workspace]
+
+[features]
+backend-boring = ["openssl/backend-boring", "openssl-sys/backend-boring"]
+backend-openssl = ["openssl/backend-openssl", "openssl-sys/backend-openssl"]
+default = []
+
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+openssl-sys = { version = "0.9.112", default-features = false }
+
+[patch.crates-io]
+openssl = { path = "../../../crates/openssl" }
+openssl-sys = { path = "../../../crates/openssl-sys" }
+
+[package.metadata.cargo-machete]
+ignored = ["openssl-sys"]

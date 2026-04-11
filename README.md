@@ -1,96 +1,102 @@
-# Rust Workspace Template
+# compat-openssl
 
-Rust workspace template for `bin/` CLI crates and `crates/` shared libraries with Gherkin + `cucumber-rs` for BDD and `cargo test` for TDD.
+compat-openssl is a patch-based compatibility workspace for consumers that already depend on `openssl` and `openssl-sys`, but need to choose either the upstream OpenSSL implementation or the BoringSSL bindings without renaming those dependencies throughout their graph.
 
-## Features
+The repository ships two shim crates:
 
-- `bin/` + `crates/` workspace layout
-- CLI example (`bin/cli-app`) using `clap`
-- Shared library example (`crates/common`)
-- BDD acceptance tests with Gherkin + `cucumber-rs`
-- TDD inner loop with `cargo test`
-- Property tests with `proptest` inside the normal `cargo test` flow
-- Optional fuzzing with `cargo-fuzz` for parser-like, protocol, or `unsafe`-heavy crates
-- Optional benchmarks with Criterion for performance-sensitive crates
-- Strict workspace lint configuration
-- `just` commands for format/lint/test/bdd/build
+- `crates/openssl-sys` preserves the `openssl-sys` package identity, selects exactly one backend, and relays a curated `DEP_OPENSSL_*` metadata contract to downstream build scripts.
+- `crates/openssl` preserves the `openssl` package identity and re-exports either the tracked `rust-openssl` fork or `boring` behind the same feature gate.
 
-## Quick Start
+This repository is intentionally consumed through `[patch.crates-io]`. Publishing these crates from here is out of scope.
+
+## Backend Model
+
+- `backend-openssl` selects the tracked `rust-openssl` fork.
+- `backend-boring` selects `boring` and `boring-sys`.
+- No default backend is provided.
+- Enabling both backends is an error.
+- Enabling neither backend is an error.
+
+Backend choice belongs at the consumer root so Cargo feature resolution stays deterministic across transitive users such as `native-tls`.
+
+## Consumer Usage
+
+Patch both crates from this repository and select exactly one backend at the root:
+
+```toml
+[features]
+default = ["tls-openssl"]
+tls-openssl = ["openssl/backend-openssl"]
+tls-boring = ["openssl/backend-boring"]
+
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+
+[patch.crates-io]
+openssl = { path = "../compat-openssl/crates/openssl" }
+openssl-sys = { path = "../compat-openssl/crates/openssl-sys" }
+```
+
+If your application or one of its build scripts depends directly on `openssl-sys`, keep that explicit dependency at the root as well:
+
+```toml
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+openssl-sys = { version = "0.9.112", default-features = false }
+```
+
+That direct `openssl-sys` dependency is required when a downstream `build.rs` needs to read `DEP_OPENSSL_*`, because Cargo only exposes linked-library metadata to immediate dependents of the sys crate.
+
+## Metadata Contract
+
+The OpenSSL backend forwards a curated subset of `DEP_REAL_OPENSSL_*` keys.
+
+The BoringSSL backend emits an OpenSSL-compatibility profile:
+
+- `DEP_OPENSSL_INCLUDE` comes from `DEP_BORINGSSL_INCLUDE` when available, otherwise from `${DEP_BORINGSSL_ROOT}/boringssl/include`.
+- `DEP_OPENSSL_VERSION_NUMBER` is synthesized as `1010100f` to advertise the current OpenSSL 1.1.1 compatibility baseline.
+- `DEP_OPENSSL_BACKEND` is synthesized as `openssl` or `boring` for diagnostics and fixture validation.
+
+Observed `boring-sys` metadata uses the `DEP_BORINGSSL_*` prefix, not `DEP_BSSL_*`, because the linked backend crate uses `links = "boringssl"`.
+
+## Repository Verification
+
+The workspace keeps the backend matrix explicit and sequential:
 
 ```bash
-just setup
 just check
 just test
 just bdd
 just test-all
-
-# Run the example CLI
-cargo run -p cli-app -- --name Rust
 ```
 
-## Testing Matrix
-
-- BDD via `features/*.feature` plus `just bdd` remains the acceptance contract.
-- Example-based crate-local unit tests remain the default inner loop for named business cases and edge cases.
-- `proptest` lives in the ordinary `cargo test` path when the rule is an invariant across many valid inputs.
-- Advanced modes are opt-in: use `cargo-fuzz` only for hostile-input or `unsafe`-heavy crates, and add Criterion only when the work has a real performance target.
-
-## BDD + TDD Workflow
-
-1. Write a failing Gherkin scenario in `features/*.feature`.
-2. Write a failing crate-local unit or property test in the affected crate to drive the inner loop.
-3. Implement the smallest shared Rust API needed to satisfy the test.
-4. Run `just test` to exercise deterministic unit tests and any `proptest` properties together.
-5. Re-run `just bdd` to confirm the acceptance scenario passes.
-
-Use example-based unit tests for named business cases and edge cases that should stay readable. Use `proptest` when the rule is an invariant, such as totals matching line-item arithmetic or checkout always emptying the cart.
-
-## Project Convention
-
-- Put executable crates under `bin/*`
-- Put reusable library crates under `crates/*`
-- Keep shared dependencies in root `[workspace.dependencies]`
-
-## Common Commands
+BDD is implemented as a gated integration test at `crates/openssl/tests/bdd.rs`. It does not run during ordinary crate tests unless explicitly requested through the internal feature gate:
 
 ```bash
-just format
-just lint
-just test
-just bdd
-just test-all
-just build
+cargo test -p openssl --features backend-openssl
+cargo test -p openssl --test bdd --features backend-openssl,internal-bdd
+cargo test -p openssl --test bdd --features backend-boring,internal-bdd
 ```
 
-`just test` runs the usual `cargo test --all-features` flow, so colocated `proptest` coverage in crate test modules stays in the standard inner loop rather than a separate test layer.
+`just bdd` runs the two BDD commands above sequentially.
 
-## Conditional Benchmark Guidance
+## Fixture Matrix
 
-Do not add Criterion or a benchmark scaffold to every new workspace by default. Most business logic and CRUD-style crate work should stay on the ordinary `just test` plus `just bdd` path unless the planned feature has an explicit latency SLA, throughput target, or known hot path worth measuring.
+The acceptance suite exercises real standalone consumers under `tests/fixtures/`:
 
-When performance-sensitive code appears, add Criterion only in the affected crate and benchmark the hot path that carries the requirement. That keeps the default template lean while still using the standard Rust benchmark tool when the work genuinely needs measurement.
+- `downstream-build-metadata` verifies the forwarded `DEP_OPENSSL_*` contract.
+- `downstream-native-tls` verifies a transitive safe-layer consumer.
+- `downstream-openssl-sys` verifies a direct raw sys consumer.
+- `downstream-openssl-exact-pin` verifies patch resolution for `openssl = "=0.10.76"`.
 
-## Conditional Fuzzing Guidance
+Each fixture is its own workspace root and patches back to this repository locally.
 
-Do not add `cargo-fuzz` targets to every new workspace by default. The standard Rust template is enough for ordinary business logic, CRUD-style services, and shared domain crates that only handle trusted or well-formed inputs.
+## Development Notes
 
-Reach for fuzzing when a specific crate starts handling hostile input or high-risk memory behavior, especially when it:
-
-- parses free-form text or file formats,
-- implements protocol framing or message decoding,
-- decodes binary formats or other untrusted payloads,
-- or relies on substantial `unsafe` code.
-
-When one of those conditions applies, enable fuzzing only in the affected crate and use the normal Cargo workflow rather than baking a `fuzz/` directory into every starter:
-
-```bash
-cd crates/<crate-name>
-cargo fuzz init
-cargo fuzz run <target-name>
-```
-
-That keeps the default template lean while still pointing parser-like, protocol, binary-decoding, or `unsafe`-heavy crates to the standard `cargo-fuzz` layout when they actually need it.
+- Cargo commands must run sequentially because the workspace and fixtures share cargo caches and lock files.
+- The BDD runner also executes fixture builds sequentially with `max_concurrent_scenarios(1)`.
+- AST or code-generation tooling is intentionally out of scope unless manual compatibility work becomes the bottleneck.
 
 ## License
 
-MIT
+Apache-2.0
