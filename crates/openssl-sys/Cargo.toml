@@ -11,8 +11,8 @@ build = "build.rs"
 [features]
 backend-boring = ["dep:boring-sys"]
 backend-openssl = ["dep:real-backend-openssl-sys"]
-default = []
+default = ["backend-boring"]
 
 [dependencies]
-boring-sys = { version = "5.0.2", optional = true }
-real-backend-openssl-sys = { git = "https://github.com/longcipher/rust-openssl", rev = "639f3b91eb198444930777600d25ee1d005466e3", version = "0.9.112", package = "real-openssl-sys", optional = true }
+boring-sys = { workspace = true, optional = true }
+real-backend-openssl-sys = { workspace = true, optional = true }

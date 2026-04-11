@@ -9,12 +9,19 @@ members = ["crates/*"]
 exclude = [".github/", "tests/fixtures/*"]
 resolver = "3"
 
+[workspace.metadata.cargo-machete]
+ignored = ["openssl", "tokio", "tokio-openssl", "postgres-openssl"]
+
 [workspace.dependencies]
+boring = "5.0.2"
+boring-sys = "5.0.2"
 clap = "4.6.0"
 config = "0.15.22"
 cucumber = "0.22.1"
 eyre = "0.6.12"
 proptest = "1.11.0"
+real-backend-openssl = { git = "https://github.com/longcipher/rust-openssl", rev = "38484762b43769e5faebd86c2f9ff2fc7e49645f", version = "0.10.76", package = "real-openssl" }
+real-backend-openssl-sys = { git = "https://github.com/longcipher/rust-openssl", rev = "38484762b43769e5faebd86c2f9ff2fc7e49645f", version = "0.9.112", package = "real-openssl-sys" }
 serde = "1.0.228"
 thiserror = "2.0.18"
 tokio = "1.51.1"

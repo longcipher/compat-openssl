@@ -15,10 +15,10 @@ fix:
   just fix-boring
 
 fix-openssl:
-  cargo +nightly clippy --fix --workspace --features backend-openssl --allow-dirty
+  cargo +nightly clippy --fix --workspace --no-default-features --features backend-openssl --allow-dirty
 
 fix-boring:
-  cargo +nightly clippy --fix --workspace --features backend-boring --allow-dirty
+  cargo +nightly clippy --fix --workspace --no-default-features --features backend-boring --allow-dirty
 
 # Run all lints
 lint:
@@ -31,16 +31,16 @@ lint:
   cargo machete
 
 lint-openssl:
-  cargo +nightly clippy --workspace --features backend-openssl -- -D warnings
+  cargo +nightly clippy --workspace --no-default-features --features backend-openssl -- -D warnings
 
 lint-boring:
-  cargo +nightly clippy --workspace --features backend-boring -- -D warnings
+  cargo +nightly clippy --workspace --no-default-features --features backend-boring -- -D warnings
 
 check-openssl:
-  cargo check --workspace --all-targets --features backend-openssl
+  cargo check --workspace --all-targets --no-default-features --features backend-openssl
 
 check-boring:
-  cargo check --workspace --all-targets --features backend-boring
+  cargo check --workspace --all-targets --no-default-features --features backend-boring
 
 # Check all targets compile
 check:
@@ -48,10 +48,20 @@ check:
   just check-boring
 
 build-openssl:
-  cargo build --workspace --features backend-openssl
+  cargo build --workspace --no-default-features --features backend-openssl
 
 build-boring:
-  cargo build --workspace --features backend-boring
+  cargo build --workspace --no-default-features --features backend-boring
+
+example-openssl:
+  cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-openssl
+
+example-boring:
+  cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-boring
+
+examples:
+  just example-openssl
+  just example-boring
 
 # Build entire workspace
 build:
@@ -59,10 +69,10 @@ build:
   just build-boring
 
 test-openssl:
-  cargo test --workspace --features backend-openssl
+  cargo test --workspace --no-default-features --features backend-openssl
 
 test-boring:
-  cargo test --workspace --features backend-boring
+  cargo test --workspace --no-default-features --features backend-boring
 
 # Run tests
 test:
@@ -70,10 +80,10 @@ test:
   just test-boring
 
 bdd-openssl:
-  cargo test -p openssl --test bdd --features backend-openssl,internal-bdd
+  cargo test -p openssl --test bdd --no-default-features --features backend-openssl,internal-bdd
 
 bdd-boring:
-  cargo test -p openssl --test bdd --features backend-boring,internal-bdd
+  cargo test -p openssl --test bdd --no-default-features --features backend-boring,internal-bdd
 
 # Run BDD scenarios
 bdd:
@@ -86,10 +96,10 @@ test-all:
   just bdd
 
 test-coverage-openssl:
-  cargo tarpaulin --workspace --features backend-openssl --timeout 300
+  cargo tarpaulin --workspace --no-default-features --features backend-openssl --timeout 300
 
 test-coverage-boring:
-  cargo tarpaulin --workspace --features backend-boring --timeout 300
+  cargo tarpaulin --workspace --no-default-features --features backend-boring --timeout 300
 
 # Run tests with coverage
 test-coverage:
@@ -109,7 +119,7 @@ check-cn:
   rg --line-number --column "\p{Han}"
 
 # Full CI check
-ci: lint test-all build
+ci: lint test-all build examples
 
 # ============================================================
 # Maintenance & Tools

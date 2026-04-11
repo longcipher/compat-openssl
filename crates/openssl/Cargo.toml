@@ -13,13 +13,13 @@ backend-openssl = [
     "dep:real-backend-openssl",
     "openssl-sys/backend-openssl",
 ]
-default = []
+default = ["backend-boring"]
 internal-bdd = []
 
 [dependencies]
-boring = { version = "5.0.2", optional = true }
-openssl-sys = { version = "0.9.112", path = "../openssl-sys", optional = true }
-real-backend-openssl = { git = "https://github.com/longcipher/rust-openssl", rev = "639f3b91eb198444930777600d25ee1d005466e3", version = "0.10.76", package = "real-openssl", optional = true }
+boring = { workspace = true, optional = true }
+openssl-sys = { version = "0.9.112", path = "../openssl-sys", default-features = false, optional = true }
+real-backend-openssl = { workspace = true, optional = true }
 
 [dev-dependencies]
 cucumber.workspace = true

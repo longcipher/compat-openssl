@@ -27,7 +27,7 @@ The compatibility layer must solve four separate problems at the same time:
 1. Cargo allows only one package with `links = "openssl"` in the full dependency graph.
 2. Downstream crates such as `native-tls` may rely on `DEP_OPENSSL_*` build metadata emitted by `openssl-sys`.
 3. Some crates depend on the safe `openssl` API, while others depend directly on `openssl-sys`.
-4. Cargo features are additive, so a naive `default = ["backend-openssl"]` design makes global backend switching unreliable once patched crates appear transitively.
+4. Cargo features are additive, so any default backend on the patched crates means explicit backend-selection commands must use `--no-default-features` once patched crates appear transitively.
 
 The compatibility layer must therefore preserve package identity, avoid `links` collisions, relay build metadata, and expose a coherent API surface under one globally selected backend.
 
@@ -54,7 +54,7 @@ The compatibility layer must therefore preserve package identity, avoid `links` 
 ### 5.1 Cargo Constraints
 
 - `links` values are globally unique. The shim crate must own `links = "openssl"`, so the real OpenSSL backend cannot keep that same `links` value.
-- Cargo features are additive across the graph. The patched `openssl` and `openssl-sys` crates must not choose a backend via default features.
+- Cargo features are additive across the graph. This repository defaults the shim crates to `backend-boring` for local `cargo build`, so explicit backend matrix commands must use `--no-default-features`, and downstream roots that need deterministic switching should keep `default-features = false` on their patched dependencies.
 - `cargo test --all-features`, `cargo check --all-features`, and similar template commands are invalid once `backend-openssl` and `backend-boring` are mutually exclusive.
 - Build metadata from `links` crates is only visible to direct dependents, so the shim `build.rs` must explicitly relay selected backend metadata under the `openssl` namespace.
 
@@ -142,6 +142,8 @@ compat-openssl/
 │   └── openssl-sys/
 ├── docs/
 │   └── design.md
+├── examples/
+│   └── consumer-app/
 ├── features/
 │   ├── backend-selection.feature
 │   ├── metadata-proxy.feature
@@ -150,6 +152,9 @@ compat-openssl/
 │   └── fixtures/
 │       ├── downstream-build-metadata/
 │       ├── downstream-native-tls/
+│       ├── downstream-tokio-native-tls/
+│       ├── downstream-reqwest-native-tls/
+│       ├── downstream-postgres-native-tls/
 │       ├── downstream-openssl-sys/
 │       └── downstream-openssl-exact-pin/
 ```
@@ -159,6 +164,7 @@ Notes:
 - The forked `rust-openssl` lives in a separate Git repository referenced by pinned `rev`; if it is ever mirrored locally, it must be added as a Git submodule rather than copied into a `vendor/` directory.
 - `crates/openssl` and `crates/openssl-sys` use the official package names because they are the patch targets.
 - `tests/fixtures/*` are standalone consumer packages used to verify real-world patch behavior. They are excluded from the root workspace and carry their own Cargo manifests and patch configuration.
+- `examples/consumer-app` is also a standalone root package. It exists as checked-in consumer documentation and is compiled separately from the workspace matrix.
 - Future optional tooling such as `bin/api-surface-sync` is intentionally excluded from the initial layout and only becomes relevant if manual compatibility-gap management proves too expensive.
 
 ## 9. Detailed Design
@@ -203,21 +209,22 @@ Branch-based references are acceptable while the compatibility line is still mov
 
 ### 9.2 Backend Feature Model
 
-The backend model must avoid Cargo feature union traps.
+The backend model must avoid Cargo feature union traps while still keeping repo-local verification ergonomic.
 
 Design rules:
 
-- `crates/openssl/Cargo.toml` and `crates/openssl-sys/Cargo.toml` use `default = []`.
+- `crates/openssl/Cargo.toml` and `crates/openssl-sys/Cargo.toml` use `default = ["backend-boring"]` so plain `cargo build` in this repository exercises the BoringSSL path.
 - Both crates define `backend-openssl` and `backend-boring` features.
 - Both crates fail the build when both backend features are enabled.
-- Both crates fail the build when no backend feature is enabled.
-- The application root must enable one backend explicitly by directly depending on patched `openssl`, even if that dependency exists only to activate features for transitive consumers.
+- Both crates fail the build when no backend feature is enabled after defaults are disabled.
+- Commands that explicitly select `backend-openssl` or `backend-boring` in this repository must pass `--no-default-features`.
+- The application root should still enable one backend explicitly by directly depending on patched `openssl`, even if that dependency exists only to activate features for transitive consumers.
 
 Representative feature wiring:
 
 ```toml
 [features]
-default = []
+default = ["backend-boring"]
 backend-openssl = ["dep:real-openssl", "openssl-sys/backend-openssl"]
 backend-boring = ["dep:boring", "openssl-sys/backend-boring"]
 ```
@@ -226,12 +233,12 @@ And for the sys shim:
 
 ```toml
 [features]
-default = []
+default = ["backend-boring"]
 backend-openssl = ["dep:real-openssl-sys"]
 backend-boring = ["dep:boring-sys"]
 ```
 
-This is stricter than the original sketch, but it is required for correctness. A default backend on the patched crates would make BoringSSL selection fragile or impossible once transitive dependencies enable defaults.
+This default is a repo-local development convenience, not a recommendation that downstream consumers rely on transitive defaults. Consumers that need deterministic switching should continue to disable defaults on their direct patched dependencies and select a backend from the root package.
 
 ### 9.2.1 Root Activation Pattern
 
@@ -241,7 +248,7 @@ Representative root manifest shape:
 
 ```toml
 [features]
-default = ["tls-openssl"]
+default = ["tls-boring"]
 tls-openssl = ["openssl/backend-openssl"]
 tls-boring = ["openssl/backend-boring"]
 
@@ -249,7 +256,7 @@ tls-boring = ["openssl/backend-boring"]
 openssl = { version = "0.10.76", default-features = false }
 ```
 
-`default-features = false` is critical here. `[patch.crates-io]` does not bypass feature union rules, and a stray default backend on the root dependency would undermine mutual exclusivity across the graph.
+`default-features = false` is critical here when the root wants to control backend selection explicitly. `[patch.crates-io]` does not bypass feature union rules, so leaving dependency defaults enabled opts the consumer into the shim crates' `backend-boring` fallback.
 
 ### 9.3 `openssl-sys` Build Metadata Proxy
 
@@ -474,22 +481,22 @@ Recommended command shape:
 
 ```just
 check-openssl:
-	cargo check --workspace --features backend-openssl
+	cargo check --workspace --no-default-features --features backend-openssl
 
 check-boring:
-	cargo check --workspace --features backend-boring
+	cargo check --workspace --no-default-features --features backend-boring
 
 test-openssl:
-	cargo test --workspace --features backend-openssl
+	cargo test --workspace --no-default-features --features backend-openssl
 
 test-boring:
-	cargo test --workspace --features backend-boring
+	cargo test --workspace --no-default-features --features backend-boring
 
 bdd-openssl:
-	cargo test -p openssl --test bdd --features backend-openssl,internal-bdd
+	cargo test -p openssl --test bdd --no-default-features --features backend-openssl,internal-bdd
 
 bdd-boring:
-	cargo test -p openssl --test bdd --features backend-boring,internal-bdd
+	cargo test -p openssl --test bdd --no-default-features --features backend-boring,internal-bdd
 
 check:
 	just check-openssl
@@ -502,11 +509,23 @@ test:
 bdd:
 	just bdd-openssl
 	just bdd-boring
+
+example-openssl:
+	cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-openssl
+
+example-boring:
+	cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-boring
+
+examples:
+	just example-openssl
+	just example-boring
 ```
 
 Cargo commands must run sequentially, never in parallel, because the workspace shares a `target/` directory.
 
-The BDD runner lives at `crates/openssl/tests/bdd.rs` and should stay behind an internal-only feature gate so ordinary `cargo test -p openssl --features backend-openssl` does not execute cucumber unless the caller explicitly requests it.
+A plain `cargo build --workspace` continues to validate the default BoringSSL path.
+
+The BDD runner lives at `crates/openssl/tests/bdd.rs` and should stay behind an internal-only feature gate so ordinary `cargo test -p openssl` does not execute cucumber unless the caller explicitly requests it.
 
 `cargo-hack` is a useful supplemental tool for checking the positive feature powerset without relying on `--all-features`, for example:
 
@@ -563,21 +582,32 @@ The empty `[workspace]` table makes the fixture its own workspace root and stops
   - contains a `build.rs` that asserts required `DEP_OPENSSL_*` variables are present.
 - `tests/fixtures/downstream-native-tls`
   - depends on `native-tls` or a similar transitive OpenSSL consumer and proves end-to-end resolution.
+- `tests/fixtures/downstream-tokio-native-tls`
+  - depends on `tokio-native-tls` to verify the async wrapper over `native-tls`.
+- `tests/fixtures/downstream-reqwest-native-tls`
+  - depends on `reqwest` with `native-tls` enabled to verify a real HTTP client path.
+- `tests/fixtures/downstream-postgres-native-tls`
+  - depends on `postgres-native-tls` to verify a database adapter over the transitive TLS path.
 - `tests/fixtures/downstream-openssl-sys`
   - depends directly on `openssl-sys` and compiles against the raw API surface.
 - `tests/fixtures/downstream-openssl-exact-pin`
   - depends on the exact upstream version currently mirrored by the shim, such as `openssl = "=0.10.76"`, to verify strict-version patch resolution.
+- `examples/consumer-app`
+  - demonstrates direct `openssl`, direct `openssl-sys`, build-script metadata usage, and verified transitive adapters in a single standalone example crate.
 
 Each fixture is built twice, once per backend, using `[patch.crates-io]` back to this workspace. Exact-pin coverage for older upstream versions is handled by matching maintenance branches or tags, not by a single branch pretending to satisfy multiple exact versions at once.
 
 Representative build invocation from the repository root:
 
 ```bash
-cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --features backend-openssl
-cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --features backend-boring
+cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --no-default-features --features backend-openssl
+cargo build --manifest-path tests/fixtures/downstream-build-metadata/Cargo.toml --no-default-features --features backend-boring
 
-cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --features backend-openssl
-cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --features backend-boring
+cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --no-default-features --features backend-openssl
+cargo build --manifest-path tests/fixtures/downstream-native-tls/Cargo.toml --no-default-features --features backend-boring
+
+cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-openssl
+cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-boring
 ```
 
 ### 10.3 BDD Scenario Inventory
@@ -596,8 +626,12 @@ The existing checkout scenario should be replaced with compatibility scenarios s
 - `downstream-compat.feature`
   - Scenario: a `native-tls` consumer builds under the OpenSSL backend.
   - Scenario: a `native-tls` consumer builds under the BoringSSL backend.
+    - Scenario: a `tokio-native-tls` consumer builds under both backends.
+    - Scenario: a `reqwest` `native-tls` consumer builds under both backends.
+    - Scenario: a `postgres-native-tls` consumer builds under both backends.
     - Scenario: a direct `openssl-sys` consumer builds under both backends.
   - Scenario: an exact-version `openssl = "=x.y.z"` consumer resolves against the current compatibility line.
+    - Scenario: the checked-in example consumer builds under both backends.
 
 ### 10.4 Unit and Property Testing
 
@@ -615,7 +649,7 @@ Property tests are useful for deterministic compatibility transforms such as met
 
 | Risk | Impact | Mitigation |
 | :--- | :--- | :--- |
-| Default backend on patched crates gets unioned with transitive features | Root cannot reliably select BoringSSL | Use `default = []` and require explicit root selection |
+| Default backend on patched crates gets unioned with explicit backend selection | Explicit OpenSSL builds accidentally enable both backends | Use `--no-default-features` for explicit backend matrix commands and keep `default-features = false` on consumer root dependencies that select their own backend |
 | BoringSSL compatibility metadata diverges from downstream expectations | Build scripts miscompile or enable the wrong cfg paths | Treat synthesized metadata, especially `DEP_OPENSSL_VERSION_NUMBER=1010100f`, as a versioned OpenSSL-compatibility profile and verify it with consumer fixtures |
 | BoringSSL lacks APIs assumed by downstream crates | Compile failures or unsafe runtime mismatches | Use compiler-driven fixture builds, minimal tiered polyfills, and explicit unsupported cases |
 | Template `--all-features` commands remain in CI | CI fails or hides backend selection errors | Replace with sequential backend matrix commands |

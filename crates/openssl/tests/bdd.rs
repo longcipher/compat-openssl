@@ -35,17 +35,25 @@ impl Backend {
 enum Fixture {
     BuildMetadata,
     NativeTls,
+    PostgresNativeTls,
+    ExampleConsumer,
     OpensslExactPin,
+    ReqwestNativeTls,
     OpensslSys,
+    TokioNativeTls,
 }
 
 impl Fixture {
     const fn manifest_relative_path(self) -> &'static str {
         match self {
             Self::BuildMetadata => "tests/fixtures/downstream-build-metadata/Cargo.toml",
+            Self::ExampleConsumer => "examples/consumer-app/Cargo.toml",
             Self::NativeTls => "tests/fixtures/downstream-native-tls/Cargo.toml",
+            Self::PostgresNativeTls => "tests/fixtures/downstream-postgres-native-tls/Cargo.toml",
             Self::OpensslExactPin => "tests/fixtures/downstream-openssl-exact-pin/Cargo.toml",
+            Self::ReqwestNativeTls => "tests/fixtures/downstream-reqwest-native-tls/Cargo.toml",
             Self::OpensslSys => "tests/fixtures/downstream-openssl-sys/Cargo.toml",
+            Self::TokioNativeTls => "tests/fixtures/downstream-tokio-native-tls/Cargo.toml",
         }
     }
 
@@ -164,9 +172,17 @@ impl CompatWorld {
         self.last_runs = vec![run_repo_cargo([
             "build".to_owned(),
             "--workspace".to_owned(),
+            "--no-default-features".to_owned(),
             "--features".to_owned(),
             backend.cargo_feature().to_owned(),
         ])];
+    }
+
+    fn build_workspace_with_defaults(&mut self) {
+        self.current_fixture = None;
+        self.selected_backend = Some(Backend::Boring);
+        self.expected_error = None;
+        self.last_runs = vec![run_repo_cargo(["build".to_owned(), "--workspace".to_owned()])];
     }
 
     fn build_fixture(&mut self, fixture: Fixture, backend: Backend) {
@@ -225,13 +241,18 @@ fn compatibility_crates_expose_backend_boring_feature(_: &mut CompatWorld) {
     assert_backend_feature_declared(Backend::Boring);
 }
 
+#[given("the compatibility crates default to backend-boring")]
+fn compatibility_crates_default_to_backend_boring(_: &mut CompatWorld) {
+    assert_default_backend(Backend::Boring);
+}
+
 #[given("backend-openssl and backend-boring are mutually exclusive")]
 fn backend_features_are_mutually_exclusive(world: &mut CompatWorld) {
     world.expected_error = Some("backend-openssl and backend-boring are mutually exclusive");
 }
 
-#[given("backend selection is required")]
-fn backend_selection_is_required(world: &mut CompatWorld) {
+#[given("backend selection is required once default features are disabled")]
+fn backend_selection_is_required_once_defaults_are_disabled(world: &mut CompatWorld) {
     world.expected_error = Some("either backend-openssl or backend-boring must be enabled");
 }
 
@@ -239,6 +260,34 @@ fn backend_selection_is_required(world: &mut CompatWorld) {
 fn downstream_native_tls_fixture_patches_repo(world: &mut CompatWorld) {
     assert_fixture_patches_repo(Fixture::NativeTls);
     world.current_fixture = Some(Fixture::NativeTls);
+}
+
+#[given("the downstream-tokio-native-tls fixture patches the openssl crates from this repository")]
+fn downstream_tokio_native_tls_fixture_patches_repo(world: &mut CompatWorld) {
+    assert_fixture_patches_repo(Fixture::TokioNativeTls);
+    world.current_fixture = Some(Fixture::TokioNativeTls);
+}
+
+#[given(
+    "the downstream-reqwest-native-tls fixture patches the openssl crates from this repository"
+)]
+fn downstream_reqwest_native_tls_fixture_patches_repo(world: &mut CompatWorld) {
+    assert_fixture_patches_repo(Fixture::ReqwestNativeTls);
+    world.current_fixture = Some(Fixture::ReqwestNativeTls);
+}
+
+#[given(
+    "the downstream-postgres-native-tls fixture patches the openssl crates from this repository"
+)]
+fn downstream_postgres_native_tls_fixture_patches_repo(world: &mut CompatWorld) {
+    assert_fixture_patches_repo(Fixture::PostgresNativeTls);
+    world.current_fixture = Some(Fixture::PostgresNativeTls);
+}
+
+#[given("the example consumer project patches the openssl crates from this repository")]
+fn example_consumer_project_patches_repo(world: &mut CompatWorld) {
+    assert_fixture_patches_repo(Fixture::ExampleConsumer);
+    world.current_fixture = Some(Fixture::ExampleConsumer);
 }
 
 #[given("the downstream-openssl-sys fixture patches the openssl crates from this repository")]
@@ -270,6 +319,11 @@ fn workspace_is_built_with_only_the_openssl_backend(world: &mut CompatWorld) {
 #[when("the workspace is built with only the BoringSSL backend enabled")]
 fn workspace_is_built_with_only_the_boringssl_backend(world: &mut CompatWorld) {
     world.build_workspace(Backend::Boring);
+}
+
+#[when("the workspace is built with default features")]
+fn workspace_is_built_with_default_features(world: &mut CompatWorld) {
+    world.build_workspace_with_defaults();
 }
 
 #[when("a consumer enables both backend features")]
@@ -376,8 +430,24 @@ fn assert_backend_feature_declared(backend: Backend) {
     );
 }
 
+fn assert_default_backend(backend: Backend) {
+    let default_declaration = format!("default = [\"{}\"]", backend.cargo_feature());
+    assert_manifest_contains(repo_root().join("crates/openssl/Cargo.toml"), &default_declaration);
+    assert_manifest_contains(
+        repo_root().join("crates/openssl-sys/Cargo.toml"),
+        &default_declaration,
+    );
+}
+
 fn assert_fixture_patches_repo(fixture: Fixture) {
     assert_fixture_contains(fixture, "[patch.crates-io]");
+
+    if fixture == Fixture::ExampleConsumer {
+        assert_fixture_contains(fixture, "openssl = { path = \"../../crates/openssl\" }");
+        assert_fixture_contains(fixture, "openssl-sys = { path = \"../../crates/openssl-sys\" }");
+        return;
+    }
+
     assert_fixture_contains(fixture, "openssl = { path = \"../../../crates/openssl\" }");
     assert_fixture_contains(fixture, "openssl-sys = { path = \"../../../crates/openssl-sys\" }");
 }
@@ -419,6 +489,7 @@ fn run_fixture_build(fixture: Fixture, backend: Backend) -> CommandOutcome {
         "build".to_owned(),
         "--manifest-path".to_owned(),
         fixture.manifest_path().to_string_lossy().into_owned(),
+        "--no-default-features".to_owned(),
         "--features".to_owned(),
         backend.cargo_feature().to_owned(),
     ])
@@ -429,6 +500,7 @@ fn run_fixture_tree(fixture: Fixture, backend: Backend) -> CommandOutcome {
         "tree".to_owned(),
         "--manifest-path".to_owned(),
         fixture.manifest_path().to_string_lossy().into_owned(),
+        "--no-default-features".to_owned(),
         "--features".to_owned(),
         backend.cargo_feature().to_owned(),
         "--depth".to_owned(),

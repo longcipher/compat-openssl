@@ -1,4 +1,4 @@
-#![deny(broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 //! OpenSSL raw passthrough shim for the compat-openssl Phase 1 baseline.
 
 #[cfg(all(feature = "backend-boring", feature = "backend-openssl"))]

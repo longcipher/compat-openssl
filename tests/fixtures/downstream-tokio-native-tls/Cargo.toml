@@ -1,0 +1,24 @@
+[package]
+name = "downstream-tokio-native-tls"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+backend-boring = ["openssl/backend-boring"]
+backend-openssl = ["openssl/backend-openssl"]
+default = []
+
+[patch.crates-io]
+openssl = { path = "../../../crates/openssl" }
+openssl-sys = { path = "../../../crates/openssl-sys" }
+
+[dependencies]
+native-tls = "0.2.18"
+openssl = { version = "0.10.76", default-features = false }
+tokio = { version = "1.51.1", features = ["io-util"] }
+tokio-native-tls = "0.3.1"
+
+[package.metadata.cargo-machete]
+ignored = ["openssl"]

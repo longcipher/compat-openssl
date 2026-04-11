@@ -1,0 +1,24 @@
+[package]
+name = "downstream-reqwest-native-tls"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+backend-boring = ["openssl/backend-boring"]
+backend-openssl = ["openssl/backend-openssl"]
+default = []
+
+[patch.crates-io]
+openssl = { path = "../../../crates/openssl" }
+openssl-sys = { path = "../../../crates/openssl-sys" }
+
+[dependencies]
+openssl = { version = "0.10.76", default-features = false }
+reqwest = { version = "0.13.2", default-features = false, features = [
+    "native-tls",
+] }
+
+[package.metadata.cargo-machete]
+ignored = ["openssl"]

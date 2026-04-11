@@ -9,12 +9,17 @@ Feature: Backend selection
     When the workspace is built with only the BoringSSL backend enabled
     Then the build succeeds
 
+  Scenario: Building the workspace with default features succeeds on BoringSSL
+    Given the compatibility crates default to backend-boring
+    When the workspace is built with default features
+    Then the build succeeds
+
   Scenario: Enabling both backends fails fast
     Given backend-openssl and backend-boring are mutually exclusive
     When a consumer enables both backend features
     Then Cargo reports a configuration error before compilation continues
 
-  Scenario: Enabling no backend fails fast
-    Given backend selection is required
+  Scenario: Enabling no backend after disabling defaults fails fast
+    Given backend selection is required once default features are disabled
     When a consumer builds without backend-openssl or backend-boring
     Then Cargo reports a configuration error before compilation continues
