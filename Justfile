@@ -50,6 +50,16 @@ check:
 build-openssl:
   cargo build --workspace --no-default-features --features backend-openssl
 
+check-feature:
+  cargo hack check \
+  --feature-powerset \
+  --depth 1 \
+  --no-dev-deps \
+  --exclude-no-default-features \
+  --exclude-all-features \
+  --exclude-features internal-bdd \
+  --mutually-exclusive-features backend-openssl,backend-boring
+
 build-boring:
   cargo build --workspace --no-default-features --features backend-boring
 

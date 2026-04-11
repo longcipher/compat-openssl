@@ -13,6 +13,11 @@ resolver = "3"
 ignored = ["openssl", "tokio", "tokio-openssl", "postgres-openssl"]
 
 [workspace.dependencies]
+# local crates
+openssl = { version = "0.10.76", path = "crates/openssl", default-features = false }
+openssl-sys = { version = "0.9.112", path = "crates/openssl-sys", default-features = false }
+
+# external crates
 boring = "5.0.2"
 boring-sys = "5.0.2"
 clap = "4.6.0"

@@ -18,7 +18,7 @@ internal-bdd = []
 
 [dependencies]
 boring = { workspace = true, optional = true }
-openssl-sys = { version = "0.9.112", path = "../openssl-sys", default-features = false, optional = true }
+openssl-sys = { workspace = true, default-features = false, optional = true }
 real-backend-openssl = { workspace = true, optional = true }
 
 [dev-dependencies]
