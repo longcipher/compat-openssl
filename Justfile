@@ -57,7 +57,6 @@ check-feature:
   --no-dev-deps \
   --exclude-no-default-features \
   --exclude-all-features \
-  --exclude-features internal-bdd \
   --mutually-exclusive-features backend-openssl,backend-boring
 
 build-boring:
@@ -89,22 +88,9 @@ test:
   just test-openssl
   just test-boring
 
-bdd-openssl:
-  cargo test -p openssl --test bdd --no-default-features --features backend-openssl,internal-bdd
-
-bdd-boring:
-  cargo test -p openssl --test bdd --no-default-features --features backend-boring,internal-bdd
-
-# Run BDD scenarios
-bdd:
-  just bdd-openssl
-  just bdd-boring
-
-# Run both TDD and BDD suites
 test-all:
   just test
-  just bdd
-
+  
 test-coverage-openssl:
   cargo tarpaulin --workspace --no-default-features --features backend-openssl --timeout 300
 

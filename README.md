@@ -80,22 +80,11 @@ The workspace keeps the backend matrix explicit and sequential:
 cargo build
 just check
 just test
-just bdd
 just examples
 just test-all
 ```
 
-BDD is implemented as a gated integration test at `crates/openssl/tests/bdd.rs`. It does not run during ordinary crate tests unless explicitly requested through the internal feature gate:
-
-```bash
-cargo test -p openssl
-cargo test -p openssl --no-default-features --features backend-openssl
-cargo test -p openssl --test bdd --no-default-features --features backend-openssl,internal-bdd
-cargo test -p openssl --test bdd --no-default-features --features backend-boring,internal-bdd
-```
-
-`just bdd` runs the two BDD commands above sequentially.
-
+`
 The standalone example consumer is compiled separately from the workspace because it behaves like a real downstream root package:
 
 ```bash
@@ -139,7 +128,6 @@ See `examples/consumer-app/README.md` for the exact dependency list, patch paths
 ## Development Notes
 
 - Cargo commands must run sequentially because the workspace and fixtures share cargo caches and lock files.
-- The BDD runner also executes fixture builds sequentially with `max_concurrent_scenarios(1)`.
 - AST or code-generation tooling is intentionally out of scope unless manual compatibility work becomes the bottleneck.
 
 ## License

@@ -466,8 +466,6 @@ The current scaffold must be normalized before meaningful implementation work be
 
 Required cleanup:
 
-- Replace `features/checkout.feature` with compatibility-related scenarios.
-- Replace the `bdd` recipe targeting `common` with a backend-aware BDD target.
 - Replace `test`, `check`, `build`, and `lint` recipes that currently use `--all-features` with sequential backend matrix commands.
 - Revisit publish-oriented recipes because crates named `openssl` and `openssl-sys` cannot be published to crates.io from this repository.
 
@@ -492,12 +490,6 @@ test-openssl:
 test-boring:
 	cargo test --workspace --no-default-features --features backend-boring
 
-bdd-openssl:
-	cargo test -p openssl --test bdd --no-default-features --features backend-openssl,internal-bdd
-
-bdd-boring:
-	cargo test -p openssl --test bdd --no-default-features --features backend-boring,internal-bdd
-
 check:
 	just check-openssl
 	just check-boring
@@ -505,10 +497,6 @@ check:
 test:
 	just test-openssl
 	just test-boring
-
-bdd:
-	just bdd-openssl
-	just bdd-boring
 
 example-openssl:
 	cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-openssl
@@ -525,7 +513,6 @@ Cargo commands must run sequentially, never in parallel, because the workspace s
 
 A plain `cargo build --workspace` continues to validate the default BoringSSL path.
 
-The BDD runner lives at `crates/openssl/tests/bdd.rs` and should stay behind an internal-only feature gate so ordinary `cargo test -p openssl` does not execute cucumber unless the caller explicitly requests it.
 
 `cargo-hack` is a useful supplemental tool for checking the positive feature powerset without relying on `--all-features`, for example:
 
@@ -610,29 +597,6 @@ cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-featur
 cargo build --manifest-path examples/consumer-app/Cargo.toml --no-default-features --features backend-boring
 ```
 
-### 10.3 BDD Scenario Inventory
-
-The existing checkout scenario should be replaced with compatibility scenarios such as:
-
-- `backend-selection.feature`
-  - Scenario: building with the OpenSSL backend succeeds.
-  - Scenario: building with the BoringSSL backend succeeds.
-  - Scenario: enabling both backends fails fast.
-  - Scenario: enabling no backend fails fast.
-- `metadata-proxy.feature`
-  - Scenario: a downstream build script sees `DEP_OPENSSL_INCLUDE` under the OpenSSL backend.
-    - Scenario: a downstream build script sees `DEP_OPENSSL_BACKEND=openssl` under the OpenSSL backend.
-    - Scenario: a downstream build script sees the expected compatibility metadata under the BoringSSL backend.
-- `downstream-compat.feature`
-  - Scenario: a `native-tls` consumer builds under the OpenSSL backend.
-  - Scenario: a `native-tls` consumer builds under the BoringSSL backend.
-    - Scenario: a `tokio-native-tls` consumer builds under both backends.
-    - Scenario: a `reqwest` `native-tls` consumer builds under both backends.
-    - Scenario: a `postgres-native-tls` consumer builds under both backends.
-    - Scenario: a direct `openssl-sys` consumer builds under both backends.
-  - Scenario: an exact-version `openssl = "=x.y.z"` consumer resolves against the current compatibility line.
-    - Scenario: the checked-in example consumer builds under both backends.
-
 ### 10.4 Unit and Property Testing
 
 Unit tests should cover:
@@ -662,7 +626,6 @@ Property tests are useful for deterministic compatibility transforms such as met
 
 ### Phase 0: Repository Normalization
 
-- Remove checkout-template BDD artifacts.
 - Add backend-aware workspace commands.
 - Exclude `tests/fixtures/*` from the root workspace and create the standalone fixture layout.
 
@@ -703,7 +666,6 @@ Phase 0 is a hard prerequisite for Phase 1. The repository should not begin shim
 ### Phase 5: Consumer Hardening and Optional Tooling
 
 - Keep AST/codegen out of scope unless manual gap closure becomes the main maintenance bottleneck.
-- Add a gated cucumber runner under `crates/openssl/tests/bdd.rs` and point the `Justfile` BDD commands at it.
 - Expand fixture coverage where it improves consumer confidence, including direct `openssl-sys` consumers.
 - Tighten metadata-fixture assertions so the observed backend marker matches the selected backend feature.
 - Finalize root feature examples and user documentation.

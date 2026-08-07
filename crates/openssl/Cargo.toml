@@ -14,7 +14,6 @@ backend-openssl = [
     "openssl-sys/backend-openssl",
 ]
 default = ["backend-boring"]
-internal-bdd = []
 
 [dependencies]
 boring = { workspace = true, optional = true }
@@ -22,13 +21,8 @@ openssl-sys = { workspace = true, default-features = false, optional = true }
 real-backend-openssl = { workspace = true, optional = true }
 
 [dev-dependencies]
-cucumber.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
-[[test]]
-name = "bdd"
-harness = false
-required-features = ["internal-bdd"]
 
 [package.metadata.cargo-machete]
 ignored = ["openssl-sys"]
