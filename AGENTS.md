@@ -1,182 +1,31 @@
-# Rust Workspace Agent Instructions
+# compat-openssl Agent Instructions
+
+## Non-negotiables
+
+- Surgical edits only: every changed line must trace to the request. No drive-by refactors, no reformatting untouched code, no deleting pre-existing dead code (mention it instead).
+- Fix root causes. Never silence a warning, weaken a check, or patch a symptom to make a gate pass.
+- Never report completion while any `just` gate below fails. Report the failure verbatim and stop.
+- Stop and ask when a request is ambiguous, conflicts with existing conventions, or requires credentials, publishing, or destructive operations.
+- When a correction reveals a missing rule, add one specific rule here ("always X for Y", never "be careful with Y"); delete rules that never catch real errors.
 
 ## Scope
 
-- This template targets Rust workspaces only.
-- `bin/` contains CLI binary crates.
-- `crates/` contains reusable library crates.
-- No frontend/web-framework-specific assumptions.
+- Two shim crates keep the crates.io package identities: `crates/openssl` (package `openssl`) and `crates/openssl-sys` (package `openssl-sys`, owns `links = "openssl"`).
+- Consumers install them through `[patch.crates-io]`; publishing from this repository is intentionally unsupported and `just publish` refuses.
+- The real OpenSSL backend is the pinned `longcipher/rust-openssl` fork, whose packages are renamed `real-openssl` / `real-openssl-sys` with `links = "real_openssl"` so the `links` value stays unique.
+- `examples/consumer-app` and every directory under `tests/fixtures/` are standalone workspace roots, excluded from the root workspace, and must keep their own `[workspace]` and `[patch.crates-io]` tables.
+- English only in code, comments, docs, and commit messages.
 
-## Tool Usage & Commands
+## Execution
 
-- **NEVER execute `cargo` commands in parallel.** Rust's cargo uses strict file locks on the `target/` directory.
-- ALWAYS run `cargo check`, `cargo build`, or `cargo test` sequentially. Wait for one to finish before starting the next.
-- When fixing errors, execute the file `Write`/`Edit` tool FIRST, wait for it to succeed, and only THEN run `cargo` commands to verify. Do not parallelize file edits with cargo builds.
+- Parallelize aggressively: dispatch subagents for independent research, exploration, and implementation.
+- NEVER run two `cargo` commands concurrently, and never overlap file edits with a running `cargo` command (`target/` file lock): finish edits, wait, then run.
+- NEVER use `git worktree`. Edit the current branch in place.
+- TDD for behavior changes: failing test first, smallest change to pass, then run the full backend matrix with `just test-all`.
 
-## Cargo Workspace Rules (Critical)
+## Verification loop
 
-1. Never manually type dependency versions in `Cargo.toml`; use `cargo add`.
-2. Add workspace-level dependencies with:
-
-   ```bash
-   cargo add <crate> --workspace
-   ```
-
-3. Add sub-crate dependencies with:
-
-   ```bash
-   cargo add <crate> -p <crate-name> --workspace
-   ```
-
-4. Root `[workspace.dependencies]` must use numeric versions only.
-5. Root `[workspace.dependencies]` must not carry features by default.
-6. Sub-crates must use `workspace = true` for `version`, `edition`, and shared dependencies.
-
-## Preferred Dependencies and Versions
-
-When introducing new dependencies, prefer these versions unless compatibility requires an upgrade:
-
-```toml
-# rust
-clap = "4.6.0"
-config = "0.15.22"
-eyre = "0.6.12"
-serde = "1.0.228"
-thiserror = "2.0.18"
-tokio = "1.51.1"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-tracing-opentelemetry = "0.32.1"
-opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.1"
-sqlx = "=0.9.0-alpha.1"
-utoipa = "5.4.0"
-utoipa-swagger-ui = "9.0.2"
-arc-swap = "1.9.1"
-hpx = "2.4.7"
-scc = "3.6.12"
-winnow = "1.0.1"
-shadow-rs = "1.7.1"
-ecdysis = "1.1.0"
-```
-
-## Dependency Priority and Forbidden Choices
-
-- HTTP client preference: `hpx` (with `rustls`) over `reqwest`.
-- Concurrent map/set preference: `scc` over `dashmap` and `RwLock<HashMap<...>>`.
-- Parsing preference: `winnow` or `pest` over ad-hoc manual parsing.
-- Read-heavy shared state: `arc-swap` over `RwLock`.
-- Forbidden by default: `anyhow`, `log`, `reqwest`, `dashmap`.
-
-## Engineering Principles
-
-### Rust Implementation Guidelines
-
-1. Error handling:
-   - Application layer: `eyre`.
-   - Library layer: `thiserror`.
-2. Database (`sqlx`):
-   - Prefer runtime queries (`sqlx::query_as`).
-   - DB structs should derive `sqlx::FromRow`.
-   - Avoid compile-time `sqlx::query!` macros by default.
-3. Concurrency:
-   - Prefer lock-free/container-first approaches (`scc`, `ArcSwap`).
-   - Avoid `Arc<Mutex<T>>` when better alternatives are available.
-4. Observability:
-   - Logging: `tracing` only.
-   - Metrics/traces: OpenTelemetry OTLP gRPC.
-   - Prometheus should not be the default instrumentation path.
-5. API docs:
-   - Generate OpenAPI with `utoipa` when exposing HTTP APIs.
-6. Configuration:
-   - Use the `config` crate and external configuration files (prefer TOML).
-7. Binaries:
-   - Use `ecdysis` for graceful restart/reload flows in daemon/server binaries.
-8. Safety:
-   - Use `unsafe` only when strictly necessary and document the safety invariants.
-
-### Key Design Principles
-
-- Modularity: Design each crate so it can be used as a standalone library with clear boundaries and minimal hidden coupling.
-- Performance: Prefer architectures that support parallelism, memory-mapped I/O for large read-heavy workloads, optimized data structures, and lock-free data types.
-- Extensibility: Use traits and generic types to support multiple implementations without invasive refactors.
-- Type Safety: Maintain strong static typing across interfaces and internals, with minimal use of dynamic dispatch.
-
-### Performance Considerations
-
-- Avoid allocations in hot paths; prefer references and borrowing to reduce allocation and copy overhead.
-- Use `rayon` for CPU-bound parallel processing.
-- Use `tokio` async/await for I/O-bound concurrency.
-
-### Concurrency and Async Execution
-
-- Prefer atomic types (`AtomicUsize`, `AtomicBool`, etc.) with explicit `Ordering` for simple shared state.
-- Use `scc` for highly concurrent maps/sets; avoid `Arc<RwLock<HashMap<...>>>` and `Arc<Mutex<HashMap<...>>>` on hot paths.
-- Use `moka` for concurrent caches instead of custom LRU implementations.
-- Prefer `parking_lot::{Mutex, RwLock}` over `std::sync` locks for synchronous locking.
-- Release `std::sync::Mutex` and `parking_lot::Mutex` guards before hitting any `.await` point.
-- Use `tokio::sync::Mutex` for locks that span across `.await` points.
-- Use `tokio::task::spawn_blocking` for CPU-bound work and blocking I/O.
-- Batch work or use bounded worker patterns instead of spawning massive volumes of tiny Tokio tasks.
-- Channel selection:
-  - Async-to-Async: `tokio::sync::mpsc` / `tokio::sync::broadcast`
-  - Sync/MPMC: `crossbeam-channel` or `flume`
-  - Avoid `std::sync::mpsc`
-
-### Memory and Allocation
-
-- For binary server applications, configure `tikv-jemallocator` or `mimalloc`.
-- For trusted internal hash keys, prefer `ahash` or `rustc-hash` over default SipHash-based maps.
-- Use `compact_str` or `smol_str` for small-string-heavy paths.
-- Prefer `beef::Cow` over `std::borrow::Cow` when minimizing footprint.
-- Use `bytes::Bytes` / `bytes::BytesMut` for network buffers; pass `Bytes` instead of cloning `Vec<u8>`.
-- For critical serialization hot paths, prefer `rkyv` or `zerocopy`; reserve `serde_json` for config and non-critical APIs.
-
-### Type and Layout
-
-- Order struct fields from largest to smallest unless stronger semantic grouping is required.
-- Use `#[repr(C)]` / `#[repr(packed)]` only for FFI or fixed protocol layout requirements.
-- Keep error types compact on hot paths; box large error payloads when needed to reduce `Result<T, E>` size.
-- Prefer typestate-style APIs for compile-time state transitions instead of runtime state checks.
-
-### Tooling and Hot Paths
-
-- Keep code clean under `clippy::pedantic`, `clippy::nursery`, and `clippy::cargo` (allow `missing_errors_doc` for non-public APIs when needed).
-- Use `#[inline]` for tiny methods called in hot loops or on every request, especially across crate boundaries.
-- Mark cold error paths with `#[cold]` and `#[inline(never)]` when it improves hot-path instruction locality.
-
-### Common Pitfalls
-
-- Keep async tasks non-blocking; offload CPU-bound work to `spawn_blocking` or `rayon`.
-- Handle errors explicitly and consistently with the `?` operator and concrete error types.
-
-### What to Avoid
-
-- Incomplete implementations: finish features before submitting.
-- Large, sweeping changes: keep changes focused and reviewable.
-- Mixing unrelated changes: keep one logical change per commit.
-
-## Foundry Rules (If Solidity Exists)
-
-- Use `soldeer` for dependencies; do not use git submodules.
-- Required commands:
-  - `forge soldeer install`
-  - `forge soldeer update`
-  - `forge build`
-  - `forge test`
-
-## Development Workflow
-
-When fixing failures, identify root cause first, then apply idiomatic fixes instead of suppressing warnings or patching symptoms.
-
-Use outside-in development for behavior changes:
-
-- **Git Restrictions:** NEVER use `git worktree`. All code modifications MUST be made directly on the current branch in the existing working directory.
-- drive implementation with failing crate-local unit tests and `proptest` properties in the affected crate,
-- keep `proptest` in the normal `cargo test` loop instead of creating a separate property-test command,
-- treat `cargo-fuzz` as conditional planning work rather than baseline template setup,
-
-After each feature or bug fix, run:
+After each feature or bug fix, in order; any failure means the task is not done:
 
 ```bash
 just format
@@ -185,21 +34,32 @@ just test
 just test-all
 ```
 
-If any command fails, report the failure and do not claim completion.
+`just test-all` runs the backend matrix; `just fixtures` additionally builds every downstream fixture against both backends.
 
-## Testing Requirements
+## Workspace rules
 
-- Unit tests: colocate with implementation (`#[cfg(test)]`).
-- Prefer example-based unit tests for named business cases and edge cases, and reserve `proptest` for invariants that should hold across many generated inputs.
-- Property tests: colocate `proptest` coverage with the crate logic it exercises so it runs through the ordinary `cargo test` path.
-- Benchmarks: only plan or add Criterion when the scope includes an explicit latency SLA, throughput target, or known hot path in a specific crate.
-- Benchmark workflow: when benchmarking is justified, add Criterion only in the affected crate instead of pre-seeding benchmark scaffolding across the workspace.
-- Fuzz tests: only plan or add `cargo-fuzz` when a crate parses hostile input, implements protocols, decodes binary formats, or contains meaningful `unsafe` code.
-- Fuzz workflow: when fuzzing is justified, generate the standard layout in the affected crate with `cargo fuzz init`, then run targets with `cargo fuzz run <target>` instead of pre-seeding a `fuzz/` directory in every starter.
-- For `/pb-plan` work, mark benchmarking as `conditional` or `N/A` unless the scope explicitly includes a performance requirement or hot path, and mark fuzzing as `conditional` or `N/A` unless the scope explicitly includes parser-like, protocol, binary-decoding, or `unsafe`-heavy code.
-- Integration tests: place in crate-level `tests/`.
-- Add tests for behavioral changes and public API changes.
+- Never hand-type dependency versions. Add per-crate deps with `cargo add <crate> -p <crate>`. Shared deps go into root `[workspace.dependencies]` — numeric versions only, no features — and are referenced with `dep = { workspace = true }`.
+- Sub-crates inherit `version`/`edition`/`license`/`repository` via `workspace = true`.
+- There is no `rust-toolchain.toml`; CI installs nightly. Use `cargo +nightly fmt` / `cargo +nightly clippy` as the Justfile does.
+- `backend-openssl` and `backend-boring` are mutually exclusive. Enabling both, or enabling neither after `--no-default-features`, must fail the build with a clear error.
+- Never use `--all-features`: the two backend features cannot be enabled together, so every explicit backend command passes `--no-default-features --features backend-<name>`.
+- The shim crates default to `backend-boring` for repo-local convenience only. Backend selection belongs at the consumer root, where the patched `openssl` and `openssl-sys` deps carry `default-features = false`.
+- Version mirror policy: the shim packages mirror the upstream pair they replace (`openssl` 0.10.x / `openssl-sys` 0.9.x). Exact pins like `openssl = "=0.10.76"` only resolve when the shim version matches exactly; older pins need their own branch or tag.
+- Workspace lints deny `unwrap_used`, `expect_used`, `panic`, `allow_attributes`, `todo`, `unimplemented`, `dbg_macro`, `print_stdout`, and `print_stderr`. The only escape hatch is `#[expect(lint, reason = "...")]`.
+- `cargo machete` runs over the workspace; crates that are declared but intentionally unused are listed in `[workspace.metadata.cargo-machete]`.
 
-## Language Requirement
+## Dependency choices
 
-- Documentation, comments, and commit messages must be English only.
+- `openssl` and `openssl-sys` here are the shims, not the upstream crates. Never add the real upstream crates as new dependencies.
+- The OpenSSL backend is the tracked `real-openssl` / `real-openssl-sys` fork pinned by git rev; the BoringSSL backend uses `boring` / `boring-sys` from crates.io.
+- Errors: `thiserror` in `crates/`; `eyre` is reserved for binaries and examples.
+- Logging: `tracing` only. Never `log`.
+- Forbidden by default: `anyhow`, `log`, `reqwest`, `dashmap`.
+
+## Code conventions
+
+- `crates/openssl-sys/build.rs` owns the downstream build contract: it relays a curated whitelist of `DEP_*` keys into the `openssl` namespace and never mirrors every backend key blindly.
+- The BoringSSL backend emits a documented OpenSSL-1.1.1 compatibility profile: `DEP_OPENSSL_VERSION_NUMBER` is synthesized as `1010100f`, `DEP_OPENSSL_INCLUDE` falls back to `${DEP_BORINGSSL_ROOT}/boringssl/include`, and `DEP_OPENSSL_BACKEND` is a diagnostic marker.
+- A key that the shim cannot honestly uphold must be omitted, not faked. Unsupported legacy APIs fail deterministically using the upstream failure convention.
+- Raw polyfills live in the sys shim only; the safe shim re-exports and adapts. Keep unsafe code isolated in `crates/openssl-sys`.
+- `cargo hack` is required by `just check-feature` and is not part of the CI image; install it with `just setup`.
